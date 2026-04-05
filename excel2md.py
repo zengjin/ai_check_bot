@@ -1,8 +1,15 @@
 import pandas as pd
 
-# 指定 'ID_column' 这一列为字符串类型
-df = pd.read_excel('ServiceCode2.xlsm', dtype={'ID_column': str})
+df = pd.read_excel(
+    'ServiceCode2.xlsm', 
+    sheet_name='サービスコードマスタ（入力シート）', 
+    header=1, 
+    dtype=str,           # 全列文字列指定
+    keep_default_na=False # 空白をNaNにせず空文字""にする(数値化を防ぐ)
+)
 
-# 转成 Markdown
+df = df.iloc[4:].reset_index(drop=True)
+
+# To Markdown
 markdown_text = df.to_markdown()
 print(markdown_text)

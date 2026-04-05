@@ -39,8 +39,8 @@ def get_excel_shapes_lxml(file_path, target_labels):
         print(f"エラー: {file_path} の解析に失敗しました: {e}")
     return results
 
-def process_master_sheet(file_path, keys, head_row, data_row):
-    sheet_name = "サービスコードマスタ（入力シート）"
+def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
+
     header_idx = head_row - 1
     
     # 対策1: 読み込み時に型推論を完全にオフにする
@@ -122,6 +122,7 @@ def main():
     
     # 2. 設定パラメータの解析
     m_conf = conf['master_servicecode']
+    sheet_name = m_conf['sheet_name']
     m_keys = m_conf['primary_keys']
     m_ignore = m_conf['ignore_cols']
     h_row = m_conf['head_row']
@@ -140,17 +141,12 @@ def main():
         for k, v in get_excel_shapes_lxml(f, labels).items(): print(f"{k}: {v}")
 
     # 3. データ処理の実行
-    df1 = process_master_sheet(f1, m_keys, h_row, d_row)
-    df2 = process_master_sheet(f2, m_keys, h_row, d_row)
-
+    df1 = process_master_sheet(f1, sheet_name, m_keys, h_row, d_row)
+    df2 = process_master_sheet(f2, sheet_name, m_keys, h_row, d_row)
     
     added, deleted, modified, unmodified = compare_datasets(df1, df2, m_keys, m_ignore)
 
     print(f"\n統計: 追加({len(added)}) 削除({len(deleted)}) 修正({len(modified)}) 未修正({len(unmodified)})")
-
-    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-    #     print(added.to_markdown())
-
 
     # 4. 更新フラグの検証
     if not added.empty and any(added["更新区分"] != flags['add']):

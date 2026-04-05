@@ -1,4 +1,5 @@
 [master_servicecode]
+sheet_name = "サービスコードマスタ（入力シート）"
 excel_labels =  ["lbl_Save", "lbl_FileVer"]
 primary_keys = ["NTTグループ会社コード", "サービスコード（値）"]
 ignore_cols = ["項目名", "更新区分"]
