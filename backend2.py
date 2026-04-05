@@ -40,38 +40,44 @@ def get_excel_shapes_lxml(file_path, target_labels):
     return results
 
 def process_master_sheet(file_path, keys, head_row, data_row):
-    """設定された行位置に基づきExcelを読み込み、前処理を行う"""
     sheet_name = "サービスコードマスタ（入力シート）"
-    
-    # pandasのheaderは0から始まるインデックス
-    # 例：head_row=2 の場合、header=1 となる
     header_idx = head_row - 1
     
-    df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_idx, dtype=str)
+    # 対策1: 読み込み時に型推論を完全にオフにする
+    df = pd.read_excel(
+        file_path, 
+        sheet_name=sheet_name, 
+        header=header_idx, 
+        dtype=str,           # 全列文字列指定
+        keep_default_na=False # 空白をNaNにせず空文字""にする(数値化を防ぐ)
+    )
     
-    # ヘッダー行からデータ行までのオフセットを計算
-    # 例：ヘッダーが2行目、データが7行目から始まる場合、中間の4行をスキップする (7 - 2 - 1 = 4)
     skip_offset = data_row - head_row - 1
     if skip_offset > 0:
         df = df.iloc[skip_offset:].reset_index(drop=True)
     
-    # データのクリーニング
-    df = df.dropna(how='all')
+    # 対策2: 全列に対して文字列変換とトリミングを適用する
+    # df.columns はヘッダーの改行除去
     df.columns = [str(col).replace('\n', '').replace('\r', '') for col in df.columns]
     
-    # 無効な主キー行を除外してフォーマットを整える
+    # Object型(文字列)として全データを確定させ、前後の空白を取る
+    df = df.apply(lambda x: x.astype(str).str.strip())
+    
+    # データのクリーニング
+    df = df.dropna(how='all')
     df = df.dropna(subset=keys)
-    for k in keys:
-        df[k] = df[k].astype(str).str.strip()
         
     return df.sort_values(by=keys).reset_index(drop=True)
 
 def compare_datasets(df1, df2, keys, ignore_cols):
     """比較ロジック：追加、削除、修正、未修正を識別する"""
+    
     df1_keys = df1[keys].drop_duplicates()
     df2_keys = df2[keys].drop_duplicates()
 
-    added = df2.merge(df1_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
+    added_all = df2.merge(df1_keys, on=keys, how='left', indicator=True)
+    added = added_all.query('_merge == "left_only"').drop('_merge', axis=1)
+    
     deleted = df1.merge(df2_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
 
     common_keys = df1_keys.merge(df2_keys, on=keys, how='inner')
@@ -83,13 +89,26 @@ def compare_datasets(df1, df2, keys, ignore_cols):
     mod_idx, unmod_idx = [], []
     for i in range(len(df2_c)):
         row1, row2 = df1_c.iloc[i], df2_c.iloc[i]
-        is_diff = any((str(row1[c]).strip() if pd.notna(row1[c]) else "") != 
-                      (str(row2[c]).strip() if pd.notna(row2[c]) else "") for c in compare_cols)
-        if is_diff: mod_idx.append(i)
-        else: unmod_idx.append(i)
+        
+        diff_found_in_row = False
+        for c in compare_cols:
+            val1 = row1[c]
+            val2 = row2[c]
+            
+            s1 = str(val1).strip() if pd.notna(val1) else ""
+            s2 = str(val2).strip() if pd.notna(val2) else ""
+
+            if s1 != s2:
+                diff_found_in_row = True
+        
+        if diff_found_in_row:
+            mod_idx.append(i)
+        else:
+            unmod_idx.append(i)
 
     modified = df2_c.iloc[mod_idx] if mod_idx else pd.DataFrame(columns=df1.columns)
     unmodified = df2_c.iloc[unmod_idx] if unmod_idx else pd.DataFrame(columns=df1.columns)
+    
     return added, deleted, modified, unmodified
 
 def read_text_file(filename):
@@ -123,9 +142,15 @@ def main():
     # 3. データ処理の実行
     df1 = process_master_sheet(f1, m_keys, h_row, d_row)
     df2 = process_master_sheet(f2, m_keys, h_row, d_row)
+
+    
     added, deleted, modified, unmodified = compare_datasets(df1, df2, m_keys, m_ignore)
 
     print(f"\n統計: 追加({len(added)}) 削除({len(deleted)}) 修正({len(modified)}) 未修正({len(unmodified)})")
+
+    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+    #     print(added.to_markdown())
+
 
     # 4. 更新フラグの検証
     if not added.empty and any(added["更新区分"] != flags['add']):
