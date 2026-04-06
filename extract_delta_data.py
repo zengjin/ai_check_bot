@@ -201,13 +201,29 @@ def extract_delta_data():
 
     print(f"\n統計: 追加({len(added)}) 削除({len(deleted)}) 修正({len(modified)}) 未修正({len(unmodified)})")
 
-    # 4. 更新フラグ（更新区分列）の整合性検証
-    # 「追加」されたデータの「更新区分」列が設定通りの値になっているかチェック
-    if not added.empty and any(added["更新区分"] != flags['add']):
-        print(f"![警告] 追加データの更新区分が不正です (期待値: {flags['add']})")
-    # 「修正」されたデータの「更新区分」列が設定通りの値になっているかチェック
-    if not modified.empty and any(modified["更新区分"] != flags['update']):
-        print(f"![警告] 修正データの更新区分が不正です (期待値: {flags['update']})")
+# 4. 更新フラグ（更新区分列）の整合性検証
+    flag_col = flags['flag_col'] 
+    
+    # --- 「追加」データの検証 ---
+    if not added.empty:
+        # 期待値と異なる行を抽出
+        invalid_added = added[added[flag_col] != flags['add']]
+        if not invalid_added.empty:
+            print(f"\n![警告] 追加データの{flag_col}が不正な行があります (期待値: {flags['add']})")
+            # 主キー(m_keys)と該当列を表示して特定しやすくする
+            print(invalid_added[m_keys + [flag_col]].to_markdown(index=False))
+        else:
+            print(f"OK: 追加データの{flag_col}はすべて '{flags['add']}' です")
+
+    # --- 「修正」データの検証 ---
+    if not modified.empty:
+        # 期待値と異なる行を抽出
+        invalid_modified = modified[modified[flag_col] != flags['update']]
+        if not invalid_modified.empty:
+            print(f"\n![警告] 修正データの{flag_col}が不正な行があります (期待値: {flags['update']})")
+            print(invalid_modified[m_keys + [flag_col]].to_markdown(index=False))
+        else:
+            print(f"OK: 修正データの{flag_col}はすべて '{flags['update']}' です")
 
     # 5. LLM（生成AI）用プロンプトの構築
     # 各種テキストファイル（役割定義、形式指定など）を結合
