@@ -169,7 +169,7 @@ def read_text_file(filename):
         with open(filename, 'r', encoding='utf-8') as f: return f.read()
     return f"[{filename} が見つかりません]"
 
-def main():
+def extract_delta_data():
     # 1. 設定の読み込み
     conf = load_config()
     
@@ -230,4 +230,4 @@ def main():
     print("\n--- prompt.txt を生成しました ---")
 
 if __name__ == "__main__":
-    main()
+    extract_delta_data()
