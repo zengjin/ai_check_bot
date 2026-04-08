@@ -4,11 +4,12 @@ import os
 import toml
 import time
 import json
-import google.generativeai as genai
+from google import genai
 from pathlib import Path
 from dotenv import load_dotenv
 
 # --- 初期設定 ---
+# Excel読み込み時のスタイル警告を非表示にする
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 def load_config(config_path="config.toml"):
@@ -21,6 +22,8 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
     """Excelを読み込み、クレンジングを行う"""
     header_idx = head_row - 1
     df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_idx, dtype=str, keep_default_na=False)
+    
+    # 物理行番号の保持
     df['Excel_Row'] = df.index + header_idx + 2
     cols = ['Excel_Row'] + [c for c in df.columns if c != 'Excel_Row']
     df = df[cols]
@@ -32,23 +35,25 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
     df.columns = [str(col).replace('\n', '').replace('\r', '') for col in df.columns]
     data_cols = [c for c in df.columns if c != 'Excel_Row']
     df[data_cols] = df[data_cols].apply(lambda x: x.astype(str).str.strip())
+    
     return df.dropna(how='all', subset=data_cols).dropna(subset=keys).reset_index(drop=True)
 
 def compare_datasets(df1, df2, keys, ignore_cols):
     """新旧2つのデータを比較し、追加・削除・修正に分類する"""
     extended_ignore = ignore_cols + ['Excel_Row']
     df1_keys, df2_keys = df1[keys].drop_duplicates(), df2[keys].drop_duplicates()
+    
     added = df2.merge(df1_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
     deleted = df1.merge(df2_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
     
     common_keys = df1_keys.merge(df2_keys, on=keys, how='inner')
     df1_c = df1.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
     df2_c = df2.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
+    
     compare_cols = [c for c in df1.columns if c not in keys and c not in extended_ignore]
-    
     mod_idx = [i for i in range(len(df2_c)) if any(str(df1_c.iloc[i][c]).strip() != str(df2_c.iloc[i][c]).strip() for c in compare_cols)]
-    modified = df2_c.iloc[mod_idx] if mod_idx else pd.DataFrame(columns=df2.columns)
     
+    modified = df2_c.iloc[mod_idx] if mod_idx else pd.DataFrame(columns=df2.columns)
     return added, deleted, modified
 
 def read_text_file(filename):
@@ -58,7 +63,7 @@ def read_text_file(filename):
     return ""
 
 def extract_delta_data(file_old, file_new, conf):
-    """Excel比較、削除表示、整合性チェック"""
+    """差分データの抽出、削除表示、整合性チェック"""
     m_conf = conf['master_servicecode']
     df1 = process_master_sheet(file_old, m_conf['sheet_name'], m_conf['primary_keys'], m_conf['head_row'], m_conf['data_row'])
     df2 = process_master_sheet(file_new, m_conf['sheet_name'], m_conf['primary_keys'], m_conf['head_row'], m_conf['data_row'])
@@ -69,7 +74,7 @@ def extract_delta_data(file_old, file_new, conf):
     print(f"追加: {len(added)}, 修正: {len(modified)}, 削除: {len(deleted)}")
 
     if not deleted.empty:
-        print(f"\n--- 削除されたデータ一覧 ---")
+        print(f"\n--- 削除されたデータ一覧 (旧ファイル物理行) ---")
         print(deleted.sort_values('Excel_Row')[['Excel_Row'] + m_conf['primary_keys']].to_markdown(index=False))
 
     flags = conf['update_flag']
@@ -80,14 +85,14 @@ def extract_delta_data(file_old, file_new, conf):
         if not df.empty:
             invalid = df[df[flag_col] != expected]
             if not invalid.empty:
-                print(f"\n[警告] {label}データの {flag_col} 不正")
+                print(f"\n[警告] {label}データの {flag_col} 不正（期待値: {expected}）")
                 print(invalid[['Excel_Row'] + m_conf['primary_keys'] + [flag_col]].to_markdown(index=False))
 
     combined_delta = pd.concat([added, modified], ignore_index=True)
     return combined_delta.sort_values(by='Excel_Row').reset_index(drop=True) if not combined_delta.empty else combined_delta
 
 def prompt_builder(file_old, file_new, conf):
-    """プロンプトを構築"""
+    """プロンプトの構築"""
     df_delta = extract_delta_data(file_old, file_new, conf)
     if df_delta.empty: return []
 
@@ -103,9 +108,8 @@ def prompt_builder(file_old, file_new, conf):
 
 def llm_invoker(file_old, file_new):
     """
-    LLM実行制御（.envからAPIキーを取得）
+    最新の google.genai パッケージを使用した実行制御
     """
-    # .envファイルを読み込む
     load_dotenv()
     api_key = os.getenv("GEMINI_API_KEY")
     
@@ -115,7 +119,7 @@ def llm_invoker(file_old, file_new):
     
     prompt_list = prompt_builder(file_old, file_new, conf)
     if not prompt_list:
-        print("\n[通知] 処理が必要なデータはありませんでした。")
+        print("\n[通知] AI処理が必要な差分はありません。")
         return
 
     all_results = []
@@ -124,22 +128,34 @@ def llm_invoker(file_old, file_new):
         if not api_key:
             raise ValueError(".env ファイルに GEMINI_API_KEY が設定されていません。")
             
-        print(f"\n>>> LLMモード: 有効 (Gemini APIを呼び出します: {llm_conf['model_id']})")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name=llm_conf['model_id'],
-            generation_config={"response_mime_type": "application/json"}
-        )
+        # --- 最新の google.genai クライアント初期化 ---
+        client = genai.Client(api_key=api_key)
+        model_id = llm_conf['model_id']
+        
+        print(f"\n>>> LLMモード: 有効 (最新SDKで実行中: {model_id})")
 
         for idx, prompt in enumerate(prompt_list, 1):
-            print(f"--- Gemini実行中 ({idx}/{len(prompt_list)}) ---")
+            print(f"--- Gemini呼び出し中 ({idx}/{len(prompt_list)}) ---")
             try:
-                response = model.generate_content(prompt)
+                # generate_content の新しい呼び出し形式
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=prompt,
+                    config={
+                        'response_mime_type': 'application/json'
+                    }
+                )
+                
+                # response.text または response.parsed を使用可能
                 batch_data = json.loads(response.text)
-                if isinstance(batch_data, list): all_results.extend(batch_data)
-                else: all_results.append(batch_data)
+                
+                if isinstance(batch_data, list):
+                    all_results.extend(batch_data)
+                else:
+                    all_results.append(batch_data)
+                    
             except Exception as e:
-                print(f"[エラー] {e}")
+                print(f"[エラー] チャンク {idx} で問題が発生しました: {e}")
             
             if idx < len(prompt_list):
                 print("5秒待機...")
@@ -151,20 +167,17 @@ def llm_invoker(file_old, file_new):
             content = read_text_file(test_filename)
             if content:
                 try:
-                    batch_data = json.loads(content)
-                    if isinstance(batch_data, list): all_results.extend(batch_data)
-                    else: all_results.append(batch_data)
-                except json.JSONDecodeError:
-                    print(f"[エラー] {test_filename} のJSON形式が不正です。")
-            else:
-                print(f"[警告] {test_filename} が見つかりません。")
+                    all_results.extend(json.loads(content))
+                except Exception as e:
+                    print(f"[エラー] {test_filename} のJSONデコードに失敗: {e}")
 
     # 結果の保存
     if all_results:
         output_df = pd.DataFrame(all_results)
         output_file = f"llm_result_{Path(file_new).stem}.xlsx"
         output_df.to_excel(output_file, index=False)
-        print(f"\n[成功] 合計 {len(all_results)} 件の結果を {output_file} に保存しました。")
+        print(f"\n[成功] 合計 {len(all_results)} 件を {output_file} に保存しました。")
 
 if __name__ == "__main__":
+    # 新旧Excelファイルを指定して実行
     llm_invoker("ServiceCode1.xlsm", "ServiceCode2.xlsm")
