@@ -15,30 +15,6 @@ def load_config(config_path="config.toml"):
         raise FileNotFoundError(f"設定ファイル {config_path} が見つかりません")
     return toml.load(config_path)
 
-def get_excel_shapes_lxml(file_path, target_labels):
-    """Excel内部のXMLを解析し、特定の図形テキストを取得する"""
-    results = {label: "Not Found" for label in target_labels}
-    try:
-        with zipfile.ZipFile(file_path, 'r') as z:
-            drawing_files = [f for f in z.namelist() if 'xl/drawings/drawing' in f]
-            for d_file in drawing_files:
-                xml_content = z.read(d_file)
-                tree = etree.fromstring(xml_content)
-                ns = {
-                    'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
-                    'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'
-                }
-                for shape in tree.xpath('//xdr:sp', namespaces=ns):
-                    nv_pr = shape.xpath('.//xdr:nvSpPr/xdr:cNvPr', namespaces=ns)
-                    if nv_pr:
-                        shape_name = nv_pr[0].get('name')
-                        if shape_name in target_labels:
-                            texts = shape.xpath('.//a:t', namespaces=ns)
-                            results[shape_name] = "".join([t.text for t in texts if t.text])
-    except Exception as e:
-        print(f"エラー: {file_path} の解析に失敗しました: {e}")
-    return results
-
 def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
     """Excelを読み込み、元の行番号を先頭に保持した状態でクレンジングする"""
     header_idx = head_row - 1
