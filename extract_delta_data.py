@@ -28,24 +28,24 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
         keep_default_na=False
     )
     
-    # Excelの物理行番号を計算 (インデックス + ヘッダー行オフセット + Excelの1始まり補正)
+    # Excelの物理行番号を計算
     df['Excel_Row'] = df.index + header_idx + 2
     
-    # 列順を整理し、行番号を先頭に配置
+    # 列順を整理
     cols = ['Excel_Row'] + [c for c in df.columns if c != 'Excel_Row']
     df = df[cols]
     
-    # ヘッダー行からデータ開始行までの不要な行を除去
+    # データ開始行までのオフセット処理
     skip_offset = data_row - head_row - 1
     if skip_offset > 0:
         df = df.iloc[skip_offset:].reset_index(drop=True)
     
-    # クレンジング：列名とデータ内の改行コード除去、および前後空白のトリム
+    # クレンジング：改行除去とトリム
     df.columns = [str(col).replace('\n', '').replace('\r', '') for col in df.columns]
     data_cols = [c for c in df.columns if c != 'Excel_Row']
     df[data_cols] = df[data_cols].apply(lambda x: x.astype(str).str.strip())
     
-    # 全空行および主キーが欠損している行を除外
+    # 不要行の除外
     df = df.dropna(how='all', subset=data_cols)
     df = df.dropna(subset=keys)
         
@@ -57,27 +57,23 @@ def compare_datasets(df1, df2, keys, ignore_cols):
     df1_keys = df1[keys].drop_duplicates()
     df2_keys = df2[keys].drop_duplicates()
 
-    # 1. 追加(Added)と削除(Deleted)を抽出
+    # 追加と削除の抽出
     added = df2.merge(df1_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
     deleted = df1.merge(df2_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
 
-    # 2. 共通キーを持つ行の詳細比較
+    # 共通キーの詳細比較
     common_keys = df1_keys.merge(df2_keys, on=keys, how='inner')
     df1_c = df1.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
     df2_c = df2.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
 
-    # 比較対象となる列の特定
     compare_cols = [c for c in df1.columns if c not in keys and c not in extended_ignore]
     
     mod_idx, unmod_idx = [], []
     for i in range(len(df2_c)):
         row1, row2 = df1_c.iloc[i], df2_c.iloc[i]
-        # いずれかの列に差分があれば「修正あり」と判定
         diff_found = any(str(row1[c]).strip() != str(row2[c]).strip() for c in compare_cols)
-        if diff_found:
-            mod_idx.append(i)
-        else:
-            unmod_idx.append(i)
+        if diff_found: mod_idx.append(i)
+        else: unmod_idx.append(i)
 
     modified = df2_c.iloc[mod_idx] if mod_idx else pd.DataFrame(columns=df2.columns)
     unmodified = df2_c.iloc[unmod_idx] if unmod_idx else pd.DataFrame(columns=df2.columns)
@@ -85,82 +81,73 @@ def compare_datasets(df1, df2, keys, ignore_cols):
     return added, deleted, modified, unmodified
 
 def read_text_file(filename):
-    """テキストファイルを読み込むユーティリティ関数"""
+    """テキストファイルを読み込む"""
     if os.path.exists(filename):
         with open(filename, 'r', encoding='utf-8') as f: return f.read()
     return f"[{filename} が見つかりません]"
 
-def extract_delta_data(file_old, file_new):
+def extract_delta_data(file_old, file_new, conf):
     """
-    コアロジック：Excelを比較し、LLM用プロンプトのリストを生成する。
-    差分がない場合は空のリストを返す。
+    Excel比較を行い、追加・修正が統合されたデータフレームを返す。
     """
-    # 1. 設定の読み込み
-    conf = load_config()
     m_conf = conf['master_servicecode']
-    chunk_size = conf['llm_param']['chunk_size']
     
-    sheet_name = m_conf['sheet_name']
-    m_keys = m_conf['primary_keys']
-    m_ignore = m_conf['ignore_cols']
-    h_row, d_row = m_conf['head_row'], m_conf['data_row']
-    flags = conf['update_flag']
-    p_files = conf['prompt_files']
+    # データの読み込み
+    df1 = process_master_sheet(file_old, m_conf['sheet_name'], m_conf['primary_keys'], m_conf['head_row'], m_conf['data_row'])
+    df2 = process_master_sheet(file_new, m_conf['sheet_name'], m_conf['primary_keys'], m_conf['head_row'], m_conf['data_row'])
     
-    # 2. データの読み込みとクレンジング
-    df1 = process_master_sheet(file_old, sheet_name, m_keys, h_row, d_row)
-    df2 = process_master_sheet(file_new, sheet_name, m_keys, h_row, d_row)
-    
-    # 3. 差分抽出
-    added, deleted, modified, unmodified = compare_datasets(df1, df2, m_keys, m_ignore)
+    # 差分抽出
+    added, deleted, modified, unmodified = compare_datasets(df1, df2, m_conf['primary_keys'], m_conf['ignore_cols'])
 
-    # 4. 統計情報の表示
+    # 統計情報の表示
     print(f"\n--- 比較統計 ({file_new}) ---")
     print(f"追加: {len(added)}, 修正: {len(modified)}, 削除: {len(deleted)}, 未修正: {len(unmodified)}")
 
-    # 5. 更新区分(Flag)の整合性チェック
+    # 更新区分の整合性チェック
+    flags = conf['update_flag']
     flag_col = flags['flag_col'] 
-    check_targets = [
-        ("追加", added, flags['add']), 
-        ("修正", modified, flags['update']), 
-        ("未修正", unmodified, flags.get('unmodified', ''))
-    ]
+    check_targets = [("追加", added, flags['add']), ("修正", modified, flags['update']), ("未修正", unmodified, flags.get('unmodified', ''))]
 
     for label, df, expected in check_targets:
         if not df.empty and expected:
             invalid = df[df[flag_col] != expected]
             if not invalid.empty:
                 print(f"\n[警告] {label}データの {flag_col} 列が不正です (期待値: '{expected}')")
-                print(invalid[['Excel_Row'] + m_keys + [flag_col]].to_markdown(index=False))
-            else:
-                print(f"OK: {label}データの {flag_col} チェック完了")
+                print(invalid[['Excel_Row'] + m_conf['primary_keys'] + [flag_col]].to_markdown(index=False))
 
-    # 削除されたデータのリストを表示 (プロンプトには含めない)
-    if not deleted.empty:
-        print(f"\n--- 削除されたデータ一覧 (旧ファイルの行番号順) ---")
-        print(deleted.sort_values('Excel_Row')[['Excel_Row'] + m_keys].to_markdown(index=False))
-
-    # 6. 追加と修正データを統合
+    # 追加と修正データを統合
     combined_delta = pd.concat([added, modified], ignore_index=True)
+    if not combined_delta.empty:
+        combined_delta = combined_delta.sort_values(by='Excel_Row').reset_index(drop=True)
     
-    # 【重要】追加・修正データが共に空の場合は、プロンプトを生成しない
-    if combined_delta.empty:
-        print("\n[通知] 追加および修正データが存在しないため、プロンプト生成をスキップします。")
-        return []
-    
-    # Excelの物理行番号順にソート
-    combined_delta = combined_delta.sort_values(by='Excel_Row').reset_index(drop=True)
+    return combined_delta
 
-    # 7. プロンプトテンプレートの構築
+def prompt_builder(file_old, file_new):
+    """
+    メイン・エントリーポイント：差分データを取得し、LLM用プロンプトを作成する。
+    """
+    # 1. 設定の読み込み
+    conf = load_config()
+    
+    # 2. 差分データの抽出（内部で関数呼び出し）
+    df_delta = extract_delta_data(file_old, file_new, conf)
+    
+    if df_delta.empty:
+        print("\n[通知] 対象データがないため、プロンプト生成をスキップします。")
+        return []
+
+    # 3. プロンプトテンプレートの読み込み
+    p_files = conf['prompt_files']
     prompt_parts = [read_text_file(p_files[k]) for k in ['role', 'input_format', 'output_format', 'check_rules']]
     prompt_base = "\n".join(prompt_parts)
     
-    # 8. データのチャンク分割（切片化）
+    # 4. データのチャンク分割
     prompts = []
-    total_rows = len(combined_delta)
+    chunk_size = conf['llm_param']['chunk_size']
+    total_rows = len(df_delta)
     
     for i in range(0, total_rows, chunk_size):
-        chunk = combined_delta.iloc[i : i + chunk_size]
+        chunk = df_delta.iloc[i : i + chunk_size]
         chunk_md = chunk.to_markdown(index=False)
         
         page_num = i // chunk_size + 1
@@ -174,18 +161,18 @@ def extract_delta_data(file_old, file_new):
 
 if __name__ == "__main__":
     # 使用ファイルの設定
-    old_file = "ServiceCode1.xlsm"
-    new_file = "ServiceCode2.xlsm"
+    old_xlsx = "ServiceCode1.xlsm"
+    new_xlsx = "ServiceCode2.xlsm"
     
-    # プロンプトリストの取得
-    prompt_list = extract_delta_data(old_file, new_file)
+    # メイン処理：プロンプトの作成
+    prompt_list = prompt_builder(old_xlsx, new_xlsx)
     
-    # 差分データがある場合のみファイルに出力
+    # 結果の出力
     if prompt_list:
         for idx, p in enumerate(prompt_list, 1):
             filename = f'prompt_{idx}.txt'
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(p)
-            print(f"\n[成功] プロンプトを保存しました: {filename} (文字数: {len(p)})")
+            print(f"\n[成功] プロンプトを保存しました: {filename}")
     else:
-        print("\n[終了] 処理が必要な差分データはありませんでした。")
+        print("\n[終了] 処理が必要なデータはありませんでした。")
