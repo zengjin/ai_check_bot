@@ -22,3 +22,4 @@ check_rules = "check_rules.txt"
 [llm_param]
 model_id = "gemini-2.5-flash"
 api_key = "AIzaSyDFe3jhIzFcgz0NW9SDif0QRh49__W-CRA"
+chunk_size = 10
