@@ -16,6 +16,7 @@ try:
     pks = ["NTTグループ会社コード", "サービスコード（値）"]
 
     # 実行
+    # mark_and_update_excel_errors("ServiceCode2-1.xlsx", "ServiceCode2-1_Fixed.xlsx", error_data_json, pks)
     mark_and_update_excel_errors("ServiceCode2.xlsm", "ServiceCode2_Fixed.xlsx", error_data_json, pks)
 except Exception as e:
     print(f"エラーリストの読み込みに失敗しました: {e}")
