@@ -41,7 +41,7 @@ def get_excel_shapes_lxml(file_path, target_labels):
     return results
 
 def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
-    """Excelを読み込み、元の行番号を保持した状態でクレンジングする"""
+    """Excelを読み込み、元の行番号を先頭に保持した状態でクレンジングする"""
     header_idx = head_row - 1
     df = pd.read_excel(
         file_path, 
@@ -51,18 +51,27 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
         keep_default_na=False
     )
     
-    # Excelの物理行番号を保持
+    # --- 行番号の付与と列順の整理 ---
+    # Excelの物理行番号を計算
     df['Excel_Row'] = df.index + header_idx + 2
     
+    # Excel_Rowを先頭（左端）に移動
+    cols = ['Excel_Row'] + [c for c in df.columns if c != 'Excel_Row']
+    df = df[cols]
+    
+    # --- データクレンジング ---
     skip_offset = data_row - head_row - 1
     if skip_offset > 0:
         df = df.iloc[skip_offset:].reset_index(drop=True)
     
+    # カラム名の改行コード除去
     df.columns = [str(col).replace('\n', '').replace('\r', '') for col in df.columns]
     
+    # データのトリミング（Excel_Row以外の列）
     data_cols = [c for c in df.columns if c != 'Excel_Row']
     df[data_cols] = df[data_cols].apply(lambda x: x.astype(str).str.strip())
     
+    # 空行および主キー欠損行の除外
     df = df.dropna(how='all', subset=data_cols)
     df = df.dropna(subset=keys)
         
@@ -70,13 +79,17 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
 
 def compare_datasets(df1, df2, keys, ignore_cols):
     """2つのデータを比較し、追加・削除・修正・未修正に分類する"""
+    # 比較時に無視する列（設定の無視列 + 行番号）
     extended_ignore = ignore_cols + ['Excel_Row']
+    
     df1_keys = df1[keys].drop_duplicates()
     df2_keys = df2[keys].drop_duplicates()
 
+    # 追加と削除の抽出
     added = df2.merge(df1_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
     deleted = df1.merge(df2_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
 
+    # 共通キーを持つデータの詳細比較（修正/未修正）
     common_keys = df1_keys.merge(df2_keys, on=keys, how='inner')
     df1_c = df1.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
     df2_c = df2.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
@@ -109,62 +122,52 @@ def extract_delta_data():
     flags, p_files = conf['update_flag'], conf['prompt_files']
     
     f1, f2 = "ServiceCode1.xlsm", "ServiceCode2.xlsm"
-																					 
     
-    # 2. データ読み込みと差分抽出
+    # 2. データ読み込み（この時点で Excel_Row は先頭列に配置済み）
     df1 = process_master_sheet(f1, sheet_name, m_keys, h_row, d_row)
     df2 = process_master_sheet(f2, sheet_name, m_keys, h_row, d_row)
     
+    # 3. 差分抽出
     added, deleted, modified, unmodified = compare_datasets(df1, df2, m_keys, m_ignore)
 
-    # --- 列順の整理: Excel_Rowを先頭に移動 ---
-    # df2のカラムリストを取得し、Excel_Rowを先頭にする
-    all_cols = list(df2.columns)
-    if 'Excel_Row' in all_cols:
-        all_cols.insert(0, all_cols.pop(all_cols.index('Excel_Row')))
-    
-    # すべてのデータフレームに新しい列順を適用し、かつ行番号順にソート
-    added = added[all_cols].sort_values(by='Excel_Row').reset_index(drop=True)
-    deleted = deleted[list(df1.columns)].sort_values(by='Excel_Row').reset_index(drop=True) # df1もExcel_Rowを持つ
-    # df1の列順も揃える
-    df1_cols = list(df1.columns)
-    df1_cols.insert(0, df1_cols.pop(df1_cols.index('Excel_Row')))
-    deleted = deleted[df1_cols]
-
-    modified = modified[all_cols].sort_values(by='Excel_Row').reset_index(drop=True)
-    unmodified = unmodified[all_cols].sort_values(by='Excel_Row').reset_index(drop=True)
+    # --- Excelの行番号順にソート ---
+    added = added.sort_values(by='Excel_Row').reset_index(drop=True)
+    deleted = deleted.sort_values(by='Excel_Row').reset_index(drop=True)
+    modified = modified.sort_values(by='Excel_Row').reset_index(drop=True)
+    unmodified = unmodified.sort_values(by='Excel_Row').reset_index(drop=True)
 
     print(f"\n統計: 追加({len(added)}) 削除({len(deleted)}) 修正({len(modified)}) 未修正({len(unmodified)})")
 
     # 4. 整合性検証
     flag_col = flags['flag_col'] 
-    for label, df, expected in [
+    
+    # 検証対象（追加、修正、未修正）
+    check_targets = [
         ("追加", added, flags['add']), 
         ("修正", modified, flags['update']), 
-        ("未修正", unmodified, flags['unmodified'])
-    ]:
+        ("未修正", unmodified, flags.get('unmodified', ''))
+    ]
+
+    for label, df, expected in check_targets:
         if not df.empty:
             invalid = df[df[flag_col] != expected]
             if not invalid.empty:
-                print(f"\n![警告] {label}データの {flag_col} 不正")
-                # display_colsの順序もExcel_Rowを先頭にする
-                d_cols = ['Excel_Row'] + m_keys + [flag_col]
-                print(invalid[d_cols].to_markdown(index=False))
+                print(f"\n![警告] {label}データの {flag_col} 不正 (期待: '{expected}')")
+                # Excel_Rowが先頭に含まれた状態で表示される
+                print(invalid[['Excel_Row'] + m_keys + [flag_col]].to_markdown(index=False))
             else:
                 print(f"OK: {label}データの {flag_col} 検証完了")
 
-    # 削除データの表示 (警告なし)
+    # 削除データの表示 (リスト表示のみ)
     if not deleted.empty:
-        print(f"\n--- 削除されたデータ一覧 (旧ファイル) ---")
+        print(f"\n--- 削除されたデータ一覧 (旧ファイル物理行順) ---")
         print(deleted[['Excel_Row'] + m_keys + [flag_col]].to_markdown(index=False))
 
-    # 5. LLM用プロンプトの構築 (Excel_Rowを先頭にしたMarkdownを生成)
+    # 5. LLM用プロンプトの構築 (追加と修正のみ、Excel_Rowを含む)
     prompt_parts = [read_text_file(p_files[k]) for k in ['role', 'input_format', 'output_format', 'check_rules']]
     prompt_base = "\n".join(prompt_parts)
-																				 
-																					
-																							 
     
+    # 各データフレームは既に Excel_Row が先頭にある
     prompt = f"""{prompt_base}
 
 ### 追加データ (Markdown)
@@ -177,7 +180,7 @@ def extract_delta_data():
     with open('prompt.txt', 'w', encoding='utf-8') as f_out:
         f_out.write(prompt)
     
-    print("\n--- prompt.txt を生成しました (Excel_Rowが左端です) ---")
+    print("\n--- prompt.txt を生成しました (Excel_Row: 第1列) ---")
 
 if __name__ == "__main__":
     extract_delta_data()
