@@ -92,7 +92,9 @@ def extract_delta_data(file_old, file_new, conf):
     return combined_delta.sort_values(by='Excel_Row').reset_index(drop=True) if not combined_delta.empty else combined_delta
 
 def prompt_builder(file_old, file_new, conf):
-    """プロンプトの構築"""
+    """
+    プロンプトを構築し、ファイル(prompt_n.txt)に保存してリストで返す
+    """
     df_delta = extract_delta_data(file_old, file_new, conf)
     if df_delta.empty: return []
 
@@ -101,9 +103,21 @@ def prompt_builder(file_old, file_new, conf):
     
     prompts = []
     chunk_size = conf['llm_param']['chunk_size']
+    total_pages = (len(df_delta) - 1) // chunk_size + 1
+
     for i in range(0, len(df_delta), chunk_size):
+        page_num = i // chunk_size + 1
         chunk_md = df_delta.iloc[i : i + chunk_size].to_markdown(index=False)
-        prompts.append(f"{prompt_base}\n\n### 対象データ\n{chunk_md}\n")
+        final_prompt = f"{prompt_base}\n\n### 対象データ (分割 {page_num}/{total_pages})\n{chunk_md}\n"
+        
+        # --- プロンプトをテキストファイルに出力 ---
+        prompt_filename = f"prompt_{page_num}.txt"
+        with open(prompt_filename, 'w', encoding='utf-8') as f:
+            f.write(final_prompt)
+        print(f"[保存] プロンプトを書き出しました: {prompt_filename}")
+        
+        prompts.append(final_prompt)
+        
     return prompts
 
 def llm_invoker(file_old, file_new):
