@@ -10,7 +10,7 @@ data_row = 7
 flag_col = "更新区分"
 add = "2:追加"
 update = "1:変更"
-unchanged = "-:データあり"
+unmodified = "-:データあり"
 delete = "9:削除"
 
 [prompt_files]
