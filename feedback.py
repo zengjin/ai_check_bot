@@ -91,7 +91,7 @@ def mark_and_update_excel_errors(file_path, output_path, error_json, pk_columns)
 
                 # --- 装飾：背景色とコメントの追加 ---
                 cell.fill = red_fill
-                comment_text = f"【判定理由】: {reason}\n【修正アドバイス】: {suggestion}"
+                comment_text = f"【判定理由】: {reason}\n\n【修正アドバイス】: {suggestion}"
                 cell.comment = Comment(comment_text, author="AI Agent")
                 cell.comment.width = 400
                 cell.comment.height = 200
