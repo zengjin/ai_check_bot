@@ -206,24 +206,44 @@ def extract_delta_data():
     
     # --- 「追加」データの検証 ---
     if not added.empty:
-        # 期待値と異なる行を抽出
         invalid_added = added[added[flag_col] != flags['add']]
         if not invalid_added.empty:
             print(f"\n![警告] 追加データの{flag_col}が不正な行があります (期待値: {flags['add']})")
-            # 主キー(m_keys)と該当列を表示して特定しやすくする
             print(invalid_added[m_keys + [flag_col]].to_markdown(index=False))
         else:
             print(f"OK: 追加データの{flag_col}はすべて '{flags['add']}' です")
 
     # --- 「修正」データの検証 ---
     if not modified.empty:
-        # 期待値と異なる行を抽出
         invalid_modified = modified[modified[flag_col] != flags['update']]
         if not invalid_modified.empty:
             print(f"\n![警告] 修正データの{flag_col}が不正な行があります (期待値: {flags['update']})")
             print(invalid_modified[m_keys + [flag_col]].to_markdown(index=False))
         else:
             print(f"OK: 修正データの{flag_col}はすべて '{flags['update']}' です")
+
+    # --- 「削除」データの検証 (追加部分) ---
+    # 削除されたデータは旧ファイル(df1)側でのフラグ状態を確認する
+    if not deleted.empty:
+        # TOMLに 'delete' 定義があることを想定 (例: flags['delete'])
+        delete_flag = flags.get('delete', '削除') 
+        invalid_deleted = deleted[deleted[flag_col] != delete_flag]
+        if not invalid_deleted.empty:
+            print(f"\n![警告] 削除データの{flag_col}が不正な行があります (期待値: {delete_flag})")
+            print(invalid_deleted[m_keys + [flag_col]].to_markdown(index=False))
+        else:
+            print(f"OK: 削除データの{flag_col}はすべて '{delete_flag}' です")
+
+    # --- 「未修正」データの検証 (追加部分) ---
+    if not unmodified.empty:
+        # TOMLに 'unmodified' 定義があることを想定 (例: flags['unmodified'] 或いは空文字)
+        unmod_flag = flags.get('unmodified', '') 
+        invalid_unmodified = unmodified[unmodified[flag_col] != unmod_flag]
+        if not invalid_unmodified.empty:
+            print(f"\n![警告] 未修正データの{flag_col}が不正な行があります (期待値: '{unmod_flag}')")
+            print(invalid_unmodified[m_keys + [flag_col]].to_markdown(index=False))
+        else:
+            print(f"OK: 未修正データの{flag_col}はすべて保持されています")
 
     # 5. LLM（生成AI）用プロンプトの構築
     # 各種テキストファイル（役割定義、形式指定など）を結合
