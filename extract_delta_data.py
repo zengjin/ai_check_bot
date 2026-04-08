@@ -141,7 +141,7 @@ def extract_delta_data():
     for label, df, expected in [
         ("追加", added, flags['add']), 
         ("修正", modified, flags['update']), 
-        ("未修正", unmodified, flags.get('unmodified', ''))
+        ("未修正", unmodified, flags['unmodified'])
     ]:
         if not df.empty:
             invalid = df[df[flag_col] != expected]
