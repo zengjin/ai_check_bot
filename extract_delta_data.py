@@ -5,19 +5,19 @@ import toml
 from pathlib import Path
 
 # --- 初期設定 ---
-# 忽略 openpyxl 读取 Excel 时的样式警告
+# Excel読み込み時のスタイル警告（openpyxl）を非表示にする
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 def load_config(config_path="config.toml"):
-    """读取 TOML 格式的配置文件"""
+    """TOML形式の設定ファイルを読み込む"""
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"設定ファイル {config_path} が見つかりません")
     return toml.load(config_path)
 
 def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
     """
-    读取 Excel 并进行数据清洗。
-    保留原始 Excel 行号以便后续追踪。
+    Excelを読み込み、クレンジングを行う。
+    後の確認のため、元のExcel行番号を保持する。
     """
     header_idx = head_row - 1
     df = pd.read_excel(
@@ -28,51 +28,51 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
         keep_default_na=False
     )
     
-    # 计算 Excel 实际行号 (索引 + 表头行偏移 + Excel从1开始计数的修正)
+    # Excelの物理行番号を計算 (インデックス + ヘッダー行オフセット + Excelの1始まり補正)
     df['Excel_Row'] = df.index + header_idx + 2
     
-    # 调整列顺序，将行号置于首列
+    # 列順を整理し、行番号を先頭に配置
     cols = ['Excel_Row'] + [c for c in df.columns if c != 'Excel_Row']
     df = df[cols]
     
-    # 过滤掉表头到数据起始行之间的冗余行
+    # ヘッダー行からデータ開始行までの不要な行を除去
     skip_offset = data_row - head_row - 1
     if skip_offset > 0:
         df = df.iloc[skip_offset:].reset_index(drop=True)
     
-    # 清洗：去除列名和内容中的换行符及首尾空格
+    # クレンジング：列名とデータ内の改行コード除去、および前後空白のトリム
     df.columns = [str(col).replace('\n', '').replace('\r', '') for col in df.columns]
     data_cols = [c for c in df.columns if c != 'Excel_Row']
     df[data_cols] = df[data_cols].apply(lambda x: x.astype(str).str.strip())
     
-    # 删除全空行和主键缺失行
+    # 全空行および主キーが欠損している行を除外
     df = df.dropna(how='all', subset=data_cols)
     df = df.dropna(subset=keys)
         
     return df.reset_index(drop=True)
 
 def compare_datasets(df1, df2, keys, ignore_cols):
-    """对比新旧两个数据集，分类为：新增、删除、修改、未修改"""
+    """新旧2つのデータを比較し、追加・削除・修正・未修正に分類する"""
     extended_ignore = ignore_cols + ['Excel_Row']
     df1_keys = df1[keys].drop_duplicates()
     df2_keys = df2[keys].drop_duplicates()
 
-    # 1. 提取新增 (Added) 和 删除 (Deleted)
+    # 1. 追加(Added)と削除(Deleted)を抽出
     added = df2.merge(df1_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
     deleted = df1.merge(df2_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
 
-    # 2. 提取共有主键的行进行详细比较
+    # 2. 共通キーを持つ行の詳細比較
     common_keys = df1_keys.merge(df2_keys, on=keys, how='inner')
     df1_c = df1.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
     df2_c = df2.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
 
-    # 确定需要对比内容的列
+    # 比較対象となる列の特定
     compare_cols = [c for c in df1.columns if c not in keys and c not in extended_ignore]
     
     mod_idx, unmod_idx = [], []
     for i in range(len(df2_c)):
         row1, row2 = df1_c.iloc[i], df2_c.iloc[i]
-        # 只要有一个字段不同，即判定为已修改
+        # いずれかの列に差分があれば「修正あり」と判定
         diff_found = any(str(row1[c]).strip() != str(row2[c]).strip() for c in compare_cols)
         if diff_found:
             mod_idx.append(i)
@@ -85,17 +85,17 @@ def compare_datasets(df1, df2, keys, ignore_cols):
     return added, deleted, modified, unmodified
 
 def read_text_file(filename):
-    """读取文本文件工具函数"""
+    """テキストファイルを読み込むユーティリティ関数"""
     if os.path.exists(filename):
         with open(filename, 'r', encoding='utf-8') as f: return f.read()
-    return f"[{filename} 未找到]"
+    return f"[{filename} が見つかりません]"
 
 def extract_delta_data(file_old, file_new):
     """
-    核心逻辑：对比 Excel 文件并生成切片后的提示词列表。
-    如果没有差异数据，则返回空列表。
+    コアロジック：Excelを比較し、LLM用プロンプトのリストを生成する。
+    差分がない場合は空のリストを返す。
     """
-    # 1. 配置加载
+    # 1. 設定の読み込み
     conf = load_config()
     m_conf = conf['master_servicecode']
     chunk_size = conf['llm_param']['chunk_size']
@@ -107,18 +107,18 @@ def extract_delta_data(file_old, file_new):
     flags = conf['update_flag']
     p_files = conf['prompt_files']
     
-    # 2. 数据读取与清洗
+    # 2. データの読み込みとクレンジング
     df1 = process_master_sheet(file_old, sheet_name, m_keys, h_row, d_row)
     df2 = process_master_sheet(file_new, sheet_name, m_keys, h_row, d_row)
     
-    # 3. 差分计算
+    # 3. 差分抽出
     added, deleted, modified, unmodified = compare_datasets(df1, df2, m_keys, m_ignore)
 
-    # 4. 打印统计报告
-    print(f"\n--- 统计结果 ({file_new}) ---")
-    print(f"新增: {len(added)}, 修正: {len(modified)}, 删除: {len(deleted)}, 未变化: {len(unmodified)}")
+    # 4. 統計情報の表示
+    print(f"\n--- 比較統計 ({file_new}) ---")
+    print(f"追加: {len(added)}, 修正: {len(modified)}, 削除: {len(deleted)}, 未修正: {len(unmodified)}")
 
-    # 5. 业务逻辑校验 (Flag 校验)
+    # 5. 更新区分(Flag)の整合性チェック
     flag_col = flags['flag_col'] 
     check_targets = [
         ("追加", added, flags['add']), 
@@ -130,32 +130,32 @@ def extract_delta_data(file_old, file_new):
         if not df.empty and expected:
             invalid = df[df[flag_col] != expected]
             if not invalid.empty:
-                print(f"\n[警告] {label}数据中的 {flag_col} 字段与实际差异不符 (期待值: '{expected}')")
+                print(f"\n[警告] {label}データの {flag_col} 列が不正です (期待値: '{expected}')")
                 print(invalid[['Excel_Row'] + m_keys + [flag_col]].to_markdown(index=False))
             else:
-                print(f"OK: {label}数据的 {flag_col} 状态校验通过")
+                print(f"OK: {label}データの {flag_col} チェック完了")
 
-    # 显示删除列表 (仅控制台打印，不进入 LLM 提示词)
+    # 削除されたデータのリストを表示 (プロンプトには含めない)
     if not deleted.empty:
-        print(f"\n--- 已删除数据 (参考自旧文件行号) ---")
+        print(f"\n--- 削除されたデータ一覧 (旧ファイルの行番号順) ---")
         print(deleted.sort_values('Excel_Row')[['Excel_Row'] + m_keys].to_markdown(index=False))
 
-    # 6. 合并新增和修改的数据
+    # 6. 追加と修正データを統合
     combined_delta = pd.concat([added, modified], ignore_index=True)
     
-    # 【逻辑修改点】如果没有需要 LLM 处理的增量数据，直接返回空列表
+    # 【重要】追加・修正データが共に空の場合は、プロンプトを生成しない
     if combined_delta.empty:
-        print("\n[通知] 没有发现新增或修正的数据，将不生成提示词文件。")
+        print("\n[通知] 追加および修正データが存在しないため、プロンプト生成をスキップします。")
         return []
     
-    # 按原始物理行号排序
+    # Excelの物理行番号順にソート
     combined_delta = combined_delta.sort_values(by='Excel_Row').reset_index(drop=True)
 
-    # 7. 准备提示词模板
+    # 7. プロンプトテンプレートの構築
     prompt_parts = [read_text_file(p_files[k]) for k in ['role', 'input_format', 'output_format', 'check_rules']]
     prompt_base = "\n".join(prompt_parts)
     
-    # 8. 差分数据切片处理
+    # 8. データのチャンク分割（切片化）
     prompts = []
     total_rows = len(combined_delta)
     
@@ -165,27 +165,27 @@ def extract_delta_data(file_old, file_new):
         
         page_num = i // chunk_size + 1
         total_pages = (total_rows - 1) // chunk_size + 1
-        chunk_info = f"\n(数据分片: {page_num} / {total_pages})"
+        chunk_info = f"\n(データ分割: {page_num} / {total_pages})"
         
-        final_prompt = f"{prompt_base}\n\n### 待处理差分数据 (Excel行号顺序) {chunk_info}\n{chunk_md}\n"
+        final_prompt = f"{prompt_base}\n\n### 対象データ (Excel行番号順) {chunk_info}\n{chunk_md}\n"
         prompts.append(final_prompt)
         
     return prompts
 
 if __name__ == "__main__":
-    # 配置新旧文件名
+    # 使用ファイルの設定
     old_file = "ServiceCode1.xlsm"
     new_file = "ServiceCode2.xlsm"
     
-    # 获取提示词列表
+    # プロンプトリストの取得
     prompt_list = extract_delta_data(old_file, new_file)
     
-    # 【逻辑修改点】只有当有提示词生成时，才执行文件写入
+    # 差分データがある場合のみファイルに出力
     if prompt_list:
         for idx, p in enumerate(prompt_list, 1):
             filename = f'prompt_{idx}.txt'
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(p)
-            print(f"\n[成功] 已保存提示词文件: {filename} (字符数: {len(p)})")
+            print(f"\n[成功] プロンプトを保存しました: {filename} (文字数: {len(p)})")
     else:
-        print("\n[结束] 程序运行完毕，无任何输出文件。")
+        print("\n[終了] 処理が必要な差分データはありませんでした。")
