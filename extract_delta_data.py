@@ -39,22 +39,33 @@ def process_master_sheet(file_path, sheet_name, keys, head_row, data_row):
     return df.dropna(how='all', subset=data_cols).dropna(subset=keys).reset_index(drop=True)
 
 def compare_datasets(df1, df2, keys, ignore_cols):
-    """新旧2つのデータを比較し、追加・削除・修正に分類する"""
+    """新旧2つのデータを比較し、追加・削除・修正・未修正に分類する"""
     extended_ignore = ignore_cols + ['Excel_Row']
-    df1_keys, df2_keys = df1[keys].drop_duplicates(), df2[keys].drop_duplicates()
-    
+    df1_keys = df1[keys].drop_duplicates()
+    df2_keys = df2[keys].drop_duplicates()
+
+    # 追加と削除の抽出
     added = df2.merge(df1_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
     deleted = df1.merge(df2_keys, on=keys, how='left', indicator=True).query('_merge == "left_only"').drop('_merge', axis=1)
-    
+
+    # 共通キーの詳細比較
     common_keys = df1_keys.merge(df2_keys, on=keys, how='inner')
     df1_c = df1.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
     df2_c = df2.merge(common_keys, on=keys, how='inner').sort_values(keys).reset_index(drop=True)
-    
+
     compare_cols = [c for c in df1.columns if c not in keys and c not in extended_ignore]
-    mod_idx = [i for i in range(len(df2_c)) if any(str(df1_c.iloc[i][c]).strip() != str(df2_c.iloc[i][c]).strip() for c in compare_cols)]
     
+    mod_idx, unmod_idx = [], []
+    for i in range(len(df2_c)):
+        row1, row2 = df1_c.iloc[i], df2_c.iloc[i]
+        diff_found = any(str(row1[c]).strip() != str(row2[c]).strip() for c in compare_cols)
+        if diff_found: mod_idx.append(i)
+        else: unmod_idx.append(i)
+
     modified = df2_c.iloc[mod_idx] if mod_idx else pd.DataFrame(columns=df2.columns)
-    return added, deleted, modified
+    unmodified = df2_c.iloc[unmod_idx] if unmod_idx else pd.DataFrame(columns=df2.columns)
+    
+    return added, deleted, modified, unmodified
 
 def read_text_file(filename):
     """テキストファイルを読み込む"""
@@ -63,33 +74,44 @@ def read_text_file(filename):
     return ""
 
 def extract_delta_data(file_old, file_new, conf):
-    """差分データの抽出、削除表示、整合性チェック"""
+    """
+    Excel比較を行い、追加・修正が統合されたデータフレームを返す。
+    """
     m_conf = conf['master_servicecode']
+    
+    # データの読み込み
     df1 = process_master_sheet(file_old, m_conf['sheet_name'], m_conf['primary_keys'], m_conf['head_row'], m_conf['data_row'])
     df2 = process_master_sheet(file_new, m_conf['sheet_name'], m_conf['primary_keys'], m_conf['head_row'], m_conf['data_row'])
     
-    added, deleted, modified = compare_datasets(df1, df2, m_conf['primary_keys'], m_conf['ignore_cols'])
+    # 差分抽出
+    added, deleted, modified, unmodified = compare_datasets(df1, df2, m_conf['primary_keys'], m_conf['ignore_cols'])
 
+    # 統計情報の表示
     print(f"\n--- 比較統計 ({file_new}) ---")
-    print(f"追加: {len(added)}, 修正: {len(modified)}, 削除: {len(deleted)}")
+    print(f"追加: {len(added)}, 修正: {len(modified)}, 削除: {len(deleted)}, 未修正: {len(unmodified)}")
 
     if not deleted.empty:
         print(f"\n--- 削除されたデータ一覧 (旧ファイル物理行) ---")
         print(deleted.sort_values('Excel_Row')[['Excel_Row'] + m_conf['primary_keys']].to_markdown(index=False))
 
+    # 更新区分の整合性チェック
     flags = conf['update_flag']
     flag_col = flags['flag_col'] 
-    check_targets = [("追加", added, flags['add']), ("修正", modified, flags['update'])]
+    check_targets = [("追加", added, flags['add']), ("修正", modified, flags['update']), ("未修正", unmodified, flags.get('unmodified', ''))]
 
     for label, df, expected in check_targets:
-        if not df.empty:
+        if not df.empty and expected:
             invalid = df[df[flag_col] != expected]
             if not invalid.empty:
-                print(f"\n[警告] {label}データの {flag_col} 不正（期待値: {expected}）")
+                print(f"\n[警告] {label}データの {flag_col} 列が不正です (期待値: '{expected}')")
                 print(invalid[['Excel_Row'] + m_conf['primary_keys'] + [flag_col]].to_markdown(index=False))
 
+    # 追加と修正データを統合
     combined_delta = pd.concat([added, modified], ignore_index=True)
-    return combined_delta.sort_values(by='Excel_Row').reset_index(drop=True) if not combined_delta.empty else combined_delta
+    if not combined_delta.empty:
+        combined_delta = combined_delta.sort_values(by='Excel_Row').reset_index(drop=True)
+    
+    return combined_delta
 
 def prompt_builder(file_old, file_new, conf):
     """
