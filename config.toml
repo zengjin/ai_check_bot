@@ -23,4 +23,15 @@ check_rules = "check_rules.txt"
 model_id = "gemini-2.5-flash"
 api_key = "AIzaSyAJegIh-jU8NYGWWdk8oQUcvKJ6ckeKfZQ"
 chunk_size = 10
-enabled = false
+enabled = true
+
+[llm_feedback]
+columns = [
+    "行番号",
+    "NTTグループ会社コード",
+    "サービスコード（値）",
+    "異常フィールド",
+    "異常値",
+    "判定理由",
+    "修正アドバイス"
+]

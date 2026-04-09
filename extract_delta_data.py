@@ -144,76 +144,127 @@ def prompt_builder(file_old, file_new, conf):
 
 def llm_invoker(file_old, file_new):
     """
-    最新の google.genai パッケージを使用した実行制御
+    最新の google.genai パッケージを使用した実行制御。
+    設定ファイルから列名を読み込み、中間処理として JSON を出力した後、Excel を生成する。
     """
+    # 1. 環境変数と設定の読み込み
     load_dotenv()
     api_key = os.getenv("GEMINI_API_KEY")
     
-    conf = load_config()
-    llm_conf = conf['llm_param']
+    # 外部定義されていると想定される設定読み込み関数
+    conf = load_config() 
+    llm_conf = conf.get('llm_param', {})
     llm_enabled = llm_conf.get('enabled', True)
     
+    # 出力フォーマットの設定（config.toml から列名を取得）
+    output_conf = conf.get('llm_feedback', {})
+    target_columns = output_conf.get('columns', [])
+    
+    # 2. プロンプトの構築
     prompt_list = prompt_builder(file_old, file_new, conf)
-    if not prompt_list:
-        print("\n[通知] AI処理が必要な差分はありません。")
-        return
-
+    
+    # 出力ファイルパスの定義
+    base_name = Path(file_new).stem
+    output_json = f"llm_result_{base_name}.json"
+    output_excel = f"llm_result_{base_name}.xlsx"
+    
     all_results = []
 
+    # AI処理が必要な差分がない場合の早期リターン
+    if not prompt_list:
+        print("\n[通知] AI処理が必要な差分はありません。ヘッダーのみのファイルを作成します。")
+        # 空のJSONとExcelを作成
+        with open(output_json, 'w', encoding='utf-8') as f:
+            json.dump([], f, indent=4, ensure_ascii=False)
+        pd.DataFrame(columns=target_columns).to_excel(output_excel, index=False)
+        return
+
+    # 3. LLM モードまたはテストモードの実行
     if llm_enabled:
         if not api_key:
             raise ValueError(".env ファイルに GEMINI_API_KEY が設定されていません。")
             
-        # --- 最新の google.genai クライアント初期化 ---
+        # 最新の SDK クライアント初期化
         client = genai.Client(api_key=api_key)
-        model_id = llm_conf['model_id']
+        model_id = llm_conf.get('model_id', 'gemini-2.0-flash')
         
-        print(f"\n>>> LLMモード: 有効 (最新SDKで実行中: {model_id})")
+        print(f"\n>>> LLMモード: 有効 (モデル: {model_id})")
 
         for idx, prompt in enumerate(prompt_list, 1):
             print(f"--- Gemini呼び出し中 ({idx}/{len(prompt_list)}) ---")
             try:
-                # generate_content の新しい呼び出し形式
+                # JSONモードを強制してコンテンツ生成
                 response = client.models.generate_content(
                     model=model_id,
                     contents=prompt,
-                    config={
-                        'response_mime_type': 'application/json'
-                    }
+                    config={'response_mime_type': 'application/json'}
                 )
                 
-                # response.text または response.parsed を使用可能
                 batch_data = json.loads(response.text)
                 
+                # リスト形式か単一オブジェクトかを確認して追加
                 if isinstance(batch_data, list):
                     all_results.extend(batch_data)
                 else:
                     all_results.append(batch_data)
                     
             except Exception as e:
-                print(f"[エラー] チャンク {idx} で問題が発生しました: {e}")
+                print(f"[エラー] チャンク {idx} の処理中に例外が発生しました: {e}")
             
+            # レート制限を考慮した待機
             if idx < len(prompt_list):
-                print("5秒待機...")
+                print("5秒待機中...")
                 time.sleep(5)
     else:
+        # テストモード: ローカルファイルからデータを読み込み
         print("\n>>> テストモード: 有効 (ローカルファイルから読み込みます)")
         for idx in range(1, len(prompt_list) + 1):
             test_filename = f"llm_result_{idx}.txt"
-            content = read_text_file(test_filename)
+            content = read_text_file(test_filename) # 外部定義の読み込み関数
             if content:
                 try:
-                    all_results.extend(json.loads(content))
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        all_results.extend(data)
+                    else:
+                        all_results.append(data)
                 except Exception as e:
-                    print(f"[エラー] {test_filename} のJSONデコードに失敗: {e}")
+                    print(f"[エラー] {test_filename} の解析に失敗しました: {e}")
 
-    # 結果の保存
+    # 4. JSON テキストファイルの生成（バックアップ用）
+    print(f"\n>>> 中間データ(JSON)を保存中...")
+    try:
+        with open(output_json, 'w', encoding='utf-8') as f:
+            # 読みやすさのためにインデントを追加し、日本語文字化け防止のため ensure_ascii=False
+            json.dump(all_results, f, indent=4, ensure_ascii=False)
+        print(f"[成功] JSONファイルが生成されました: {output_json}")
+    except Exception as e:
+        print(f"[警告] JSONファイルの保存に失敗しました: {e}")
+
+    # 5. Excel ファイルの生成
+    print(f"\n>>> Excelファイルを生成中...")
     if all_results:
         output_df = pd.DataFrame(all_results)
-        output_file = f"llm_result_{Path(file_new).stem}.xlsx"
-        output_df.to_excel(output_file, index=False)
-        print(f"\n[成功] 合計 {len(all_results)} 件を {output_file} に保存しました。")
+
+        # 【デバッグ用】JSONにある実際のキーと、設定ファイルの列名を表示
+        print(f"[デバッグ] JSONの実際のキー: {list(output_df.columns)}")
+        print(f"[デバッグ] 設定ファイルの列名: {target_columns}")
+
+        # 設定された列順序に再配置（不要な列は削除、不足している列は空で追加）
+        output_df = output_df.reindex(columns=target_columns)
+        print(f"[情報] 合計 {len(all_results)} 件のデータを処理しました。")
+    else:
+        # 結果が空の場合、設定された列名のみを持つ DataFrame を作成
+        output_df = pd.DataFrame(columns=target_columns)
+        print("[通知] 処理結果が空です。空の表を作成します。")
+
+    try:
+        output_df.to_excel(output_excel, index=False)
+        print(f"[成功] Excelファイルが保存されました: {output_excel}")
+    except PermissionError:
+        print(f"[致命的エラー] {output_excel} を保存できません。ファイルが開かれていないか確認してください。")
 
 if __name__ == "__main__":
     # 新旧Excelファイルを指定して実行
-    llm_invoker("ServiceCode1.xlsm", "ServiceCode2.xlsm")
+#    llm_invoker("ServiceCode1.xlsm", "ServiceCode2.xlsm")
+    llm_invoker("ServiceCode3.xlsm", "ServiceCode4.xlsm")
