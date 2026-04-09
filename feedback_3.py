@@ -74,11 +74,18 @@ def mark_and_update_excel_errors(file_path, output_path, error_json, pk_columns)
             # 主キーの値を抽出してタプル化
             current_pk_values = tuple(str(error.get(col)).strip() for col in pk_columns)
 
-            # --- 複数フィールドの分割対応 ---
-            raw_target_cols = str(error.get("異常フィールド", ""))
-            # カンマ（全角・半角）で分割し、前後の空白を除去
-            target_cols = [c.strip() for re_split in [re.split(r'[,]', raw_target_cols)] for c in re_split if c.strip()]
+            # # --- 複数フィールドの分割対応 ---
+            # raw_target_cols = str(error.get("異常フィールド", ""))
+            # # カンマ（全角・半角）で分割し、前後の空白を除去
+            # target_cols = [c.strip() for re_split in [re.split(r'[,]', raw_target_cols)] for c in re_split if c.strip()]
             
+            # --- 複数フィールドの分割対応（修正版） ---
+            raw_target_cols = str(error.get("異常フィールド", ""))
+            
+            # カンマ(,) または スラッシュ(/) または セミコロン(;) で分割
+            # [,/;/] のように[]内に区切り文字を追加します
+            target_cols = [c.strip() for c in re.split(r'[,/;/]', raw_target_cols) if c.strip()]
+
             reason = error.get("判定理由", "エラーあり")
             suggestion = error.get("修正アドバイス", "内容を確認してください")
 
