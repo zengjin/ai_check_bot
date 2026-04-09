@@ -21,9 +21,8 @@ check_rules = "check_rules.txt"
 
 [llm_param]
 model_id = "gemini-2.5-flash"
-api_key = "AIzaSyAJegIh-jU8NYGWWdk8oQUcvKJ6ckeKfZQ"
 chunk_size = 5
-enabled = false
+enabled = true
 wait_time = 10
 
 [llm_feedback]
