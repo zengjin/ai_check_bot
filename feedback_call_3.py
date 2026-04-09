@@ -1,4 +1,4 @@
-from feedback import mark_and_update_excel_errors
+from feedback_3 import mark_and_update_excel_errors
 import pandas as pd
 
 # 外部のエラーリストファイルを指定
