@@ -1,3 +1,5 @@
+from logging import config
+
 import pandas as pd
 import warnings
 import os
@@ -211,10 +213,14 @@ def llm_invoker(file_old, file_new):
             except Exception as e:
                 print(f"[エラー] チャンク {idx} の処理中に例外が発生しました: {e}")
             
-            # レート制限を考慮した待機
+            # 値を取得（キーが存在しない場合のデフォルト値も設定可能）
+            wait_sec = llm_conf.get('wait_time', 10)
+    
+            # --- ループ内などの処理 ---
             if idx < len(prompt_list):
-                print("5秒待機中...")
-                time.sleep(5)
+                print(f"{wait_sec}秒待機中...")
+                time.sleep(wait_sec)
+
     else:
         # テストモード: ローカルファイルからデータを読み込み
         print("\n>>> テストモード: 有効 (ローカルファイルから読み込みます)")

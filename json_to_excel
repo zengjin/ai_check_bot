@@ -1,0 +1,40 @@
+import pandas as pd
+import json
+import os
+
+def json_to_excel(json_file_path, excel_file_path):
+    """
+    JSONファイルを読み込み、Excelファイルとして保存する関数
+    """
+    try:
+        # 1. JSONファイルの読み込み
+        # encoding='utf-8' を指定することで日本語の文字化けを防ぎます
+        with open(json_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        # 2. データの構造に応じてDataFrameに変換
+        # もしJSONが階層構造（ネスト）になっている場合は pd.json_normalize(data) を推奨
+        df = pd.DataFrame(data)
+
+        # 3. Excelファイルとして出力
+        # index=False は、左端の行番号をExcelに含めない設定です
+        df.to_excel(excel_file_path, index=False, engine='openpyxl')
+        
+        print(f"【完了】Excelファイルが作成されました: {excel_file_path}")
+
+    except FileNotFoundError:
+        print(f"【エラー】指定されたファイルが見つかりません: {json_file_path}")
+    except Exception as e:
+        print(f"【エラー】予期せぬエラーが発生しました: {e}")
+
+# --- 実行セクション ---
+if __name__ == "__main__":
+    # 入力ファイルと出力ファイルの設定
+    input_json = 'llm_result_ServiceCode6.json'      # 変換したいJSONファイル名
+    output_excel = 'llm_result_ServiceCode6.xlsx'  # 保存したいExcelファイル名
+
+    # ファイルの存在確認をしてから実行
+    if os.path.exists(input_json):
+        json_to_excel(input_json, output_excel)
+    else:
+        print(f"エラー: '{input_json}' が現在のディレクトリに存在しません。")
