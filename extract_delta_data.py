@@ -97,7 +97,7 @@ def extract_delta_data(file_old, file_new, conf):
     # 更新区分の整合性チェック
     flags = conf['update_flag']
     flag_col = flags['flag_col'] 
-    check_targets = [("追加", added, flags['add']), ("修正", modified, flags['update']), ("未修正", unmodified, flags.get('unmodified', ''))]
+    check_targets = [("追加", added, flags['add']), ("修正", modified, flags['update']), ("未修正", unmodified, flags['unmodified'])]
 
     for label, df, expected in check_targets:
         if not df.empty and expected:
