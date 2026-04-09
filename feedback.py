@@ -3,6 +3,10 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
 import traceback
+import warnings
+
+# 忽略 openpyxl 产生的特定 UserWarning
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 # --- 定数定義：Excelのフォーマットに合わせてここを調整してください ---
 TARGET_SHEET_NAME = "サービスコードマスタ（入力シート）"  # 操作対象のワークシート名
